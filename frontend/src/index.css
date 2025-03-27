@@ -1,0 +1,41 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@import url('https://fonts.googleapis.com/css2?family=Amatic+SC:wght@400;700&family=Lavishly+Yours&family=Outfit:wght@100..900&family=Smooch+Sans:wght@100..900&&family=Vibur&display=swap');
+
+
+* {
+    font-family: "Outfit", sans-serif;
+    font-optical-sizing: auto;
+}
+
+.nav-links {
+    cursor: pointer;
+    transition: all ease-in-out 0.3s;
+}
+
+.nav-links:hover {
+    color: #fbb667;
+}
+
+.h3-headings {
+    font-size: 1.25rem;
+    font-weight: 600;
+    color: #fcce9f
+}
+
+.h3-p {
+    margin-bottom: 0.5rem;
+    color: #9CA3AF;
+}
+
+button {
+    background-color: #fbb667;
+    color: white;
+    transition: all ease-in-out 0.3s;
+}
+
+button:hover{
+    opacity: 90%;
+}
