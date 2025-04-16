@@ -6,9 +6,10 @@ import nltk
 from nltk.sentiment import SentimentIntensityAnalyzer
 from datetime import datetime, timedelta
 from collections import defaultdict
-from transformers import pipeline
+from transformers import pipeline, AutoModelForSequenceClassification, AutoTokenizer
 import emoji
 import re
+import torch
 
 app = Flask(__name__)
 CORS(app, resources={r"/*":{"origin":"*"}})  # Allow frontend to communicate with backend
@@ -23,6 +24,16 @@ REDIRECT_URI = "http://localhost:5000/auth/callback"
 
 # Facebook OAuth URL
 AUTH_URL = f"https://www.facebook.com/v18.0/dialog/oauth?client_id=999489145463251&redirect_uri={REDIRECT_URI}&scope=instagram_basic,instagram_manage_comments,pages_show_list&response_type=code"
+
+@app.route('/send-message', methods=['POST'])
+def send_message():
+    data = request.json
+    email = data.get('email')
+    message = data.get('message')
+
+    print(f"New message from {email} : {message}")
+
+    return jsonify({"status":"success", "message": "Message received successfully"})
 
 @app.route("/")
 def home():
@@ -51,12 +62,25 @@ def auth_callback():
         return jsonify({"error": "Failed to fetch access token", "details": response.json()}), 400
         
     data = response.json()
+    print("data: ",data)
     if "access_token" in data:
         access_token = data["access_token"]
         frontend_redirect = f"http://localhost:3000?access_token={access_token}"
         return redirect(frontend_redirect)
     else:
         return jsonify(data), 400
+    
+@app.route('/get_user')
+def get_user():
+    access_token = request.args.get("access_token")
+    url = "https://graph.facebook.com/me"
+    params = {
+        "access_token": access_token,
+        "fields": "id,name,email,picture.type(large)"
+    }
+
+    response = requests.get(url, params=params)
+    return jsonify(response.json())
 
 # Backend: Get Facebook Pages
 @app.route('/get_pages')
@@ -74,14 +98,15 @@ def get_pages():
 @app.route('/get_instagram_account')
 def get_instagram_account():
     page_access_token = request.args.get("access_token")
+    page_id = request.args.get("page_id")
 
-    if not page_access_token:
-        return jsonify({"error": "Access token is required"}), 400
+    if not page_access_token or not page_id:
+        return jsonify({"error": "Access token and page_id is required"}), 400
 
-    url = f"https://graph.facebook.com/v18.0/me"
+    url = f"https://graph.facebook.com/v19.0/{page_id}"
     params = {
         "access_token": page_access_token,
-        "fields": "id,instagram_business_account"
+        "fields": "id,instagram_business_account{name, username,profile_picture_url}"
     }
     response = requests.get(url, params=params)
     return jsonify(response.json())
@@ -100,7 +125,7 @@ def get_posts():
     url = f"https://graph.facebook.com/v18.0/{instagram_id}/media"
     params = {
         "access_token": page_access_token,
-        "fields": "id,caption,media_url,permalink"
+        "fields": "id,caption,media_url,permalink,like_count,timestamp"
     }
 
     response = requests.get(url, params=params)
@@ -133,6 +158,11 @@ def fetch_comments():
 
 nltk.download("vader_lexicon")
 
+# Load Pre-trained BERT Model for Sarcasm Detection
+MODEL_NAME = "lxyuan/distilbert-base-multilingual-cased-sentiments-student"
+tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
+model = AutoModelForSequenceClassification.from_pretrained(MODEL_NAME)
+
 # Load Pre-trained Emotion Analysis Model
 emotion_model = pipeline("text-classification", model="joeddav/distilbert-base-uncased-go-emotions-student")
 
@@ -150,13 +180,29 @@ def preprocess_text(text):
 def get_sentiment(comment_text):
     results = sentiment_model(comment_text)
     sentiment_label = results[0]['label']
-    return "Positive" if sentiment_label == "LABEL_2" else "Negative" if sentiment_label == "LABEL_0" else "Neutral"
+    # return "Positive" if sentiment_label == "LABEL_2" else "Negative" if sentiment_label == "LABEL_0" else "Neutral"
+    # Mapping the labels to human-readable sentiments
+    if sentiment_label == "LABEL_2":
+        sentiment = "Positive"
+    elif sentiment_label == "LABEL_0":
+        sentiment = "Negative"
+    else:
+        sentiment = "Neutral"
+    
+    return sentiment, results[0]['score']  # label and confidence score
 
 def analyze_emotion(text):
     """Analyze emotions from text using Google's GoEmotions model"""
     result = emotion_model(text)
     # sorted_result = sorted(result[0], key=lambda x: x['score'], reverse=True)
     return result[0]['label']  # Highest scoring emotion
+
+def detect_sarcasm(text):
+    inputs = tokenizer(text, return_tensors="pt", truncation=True, padding=True)
+    with torch.no_grad():
+        logits = model(**inputs).logits
+        prediction = torch.argmax(logits, dim=-1).item()
+    return "Sarcastic" if prediction == 1 else "Not Sarcastic"
 
 def emoji_to_text(emoji_text):
     """Convert emoji to text description"""
@@ -184,15 +230,23 @@ def analyze_comments():
         comment_text = preprocess_text(comment_text)
         text_with_emojis = emoji_to_text(comment_text)  # Convert emojis to words
 
+        sarcasm_label = detect_sarcasm(text_with_emojis)
 
         # 🟢 Sentiment Analysis (VADER + TextBlob)
         vader_score = sia.polarity_scores(comment_text)["compound"]
         blob_score = TextBlob(comment_text).sentiment.polarity
         sentiment_score = (vader_score + blob_score)/2
 
-        sentiment = get_sentiment(comment_text)
+        sentiment, transformer_confidence = get_sentiment(comment_text)
         emotion = analyze_emotion(text_with_emojis)  # Detect dominant emotion
         sentiment_counts[sentiment] += 1
+
+        model_agreement = "Agree" if (
+            (sentiment == "Positive" and sentiment_score > 0.1) or
+            (sentiment == "Negative" and sentiment_score < -0.1) or
+            (sentiment == "Neutral" and -0.1 <= sentiment_score <= 0.1)
+        ) else "Disagree"
+
 
         # Store analyzed comment
         analyzed_comments.append({
@@ -201,7 +255,11 @@ def analyze_comments():
             "username": comment.get("username"),
             "created_time":comment.get("created_time"),
             "sentiment": sentiment,
+            "sentiment_score": round(sentiment_score, 3),  # From VADER + TextBlob
+            "transformer_confidence": round(transformer_confidence, 3),  # From huggingface model
             "emotion": emotion,
+            "sarcasm": sarcasm_label,
+            "model_agreement": model_agreement
         })
 
     return jsonify({
@@ -210,79 +268,79 @@ def analyze_comments():
         "sentiment_counts": sentiment_counts,  # Send counts for visualization
     })
 
-@app.route("/fan_engagement_insights")
-def fan_engagement_insights():
-    """Analyze fan engagement across all posts by processing Instagram comments."""
+# @app.route("/fan_engagement_insights")
+# def fan_engagement_insights():
+#     """Analyze fan engagement across all posts by processing Instagram comments."""
 
-    # Get access token from request
-    access_token = request.args.get("access_token")
+#     # Get access token from request
+#     access_token = request.args.get("access_token")
     
-    if not access_token:
-        return jsonify({"error": "Missing access token"}), 400
+#     if not access_token:
+#         return jsonify({"error": "Missing access token"}), 400
 
-    #Get Instagram Business ID
-    page_url = f"https://graph.facebook.com/v18.0/me/accounts"
-    page_params = {"access_token": access_token, "fields": "id,instagram_business_account"}
+#     #Get Instagram Business ID
+#     page_url = f"https://graph.facebook.com/v18.0/me/accounts"
+#     page_params = {"access_token": access_token, "fields": "id,instagram_business_account"}
     
-    page_response = requests.get(page_url, params=page_params)
-    page_data = page_response.json()
+#     page_response = requests.get(page_url, params=page_params)
+#     page_data = page_response.json()
 
-    if "error" in page_data or "data" not in page_data or not page_data["data"]:
-        return jsonify({"error": "Failed to fetch Instagram Business Account"}), 400
+#     if "error" in page_data or "data" not in page_data or not page_data["data"]:
+#         return jsonify({"error": "Failed to fetch Instagram Business Account"}), 400
 
-    instagram_id = page_data["data"][0].get("instagram_business_account", {}).get("id")
+#     instagram_id = page_data["data"][0].get("instagram_business_account", {}).get("id")
 
-    if not instagram_id:
-        return jsonify({"error": "Instagram Business Account not found"}), 400
+#     if not instagram_id:
+#         return jsonify({"error": "Instagram Business Account not found"}), 400
 
-    # Step 1: Fetch all posts
-    posts_url = f"https://graph.facebook.com/v18.0/{instagram_id}/media"
-    posts_params = {"access_token": access_token, "fields": "id,caption"}
+#     # Step 1: Fetch all posts
+#     posts_url = f"https://graph.facebook.com/v18.0/{instagram_id}/media"
+#     posts_params = {"access_token": access_token, "fields": "id,caption"}
 
-    posts_response = requests.get(posts_url, params=posts_params)
-    posts_data = posts_response.json().get("data", [])
+#     posts_response = requests.get(posts_url, params=posts_params)
+#     posts_data = posts_response.json().get("data", [])
 
-    if posts_response.status_code != 200 or not posts_data:
-        return jsonify({"error": "Failed to fetch posts", "details": posts_response.json()}), 400
+#     if posts_response.status_code != 200 or not posts_data:
+#         return jsonify({"error": "Failed to fetch posts", "details": posts_response.json()}), 400
 
-    fan_activity = defaultdict(lambda: {"count": 0, "sentiment": []})
+#     fan_activity = defaultdict(lambda: {"count": 0, "sentiment": []})
 
-    # Step 2: Fetch comments for each post
-    for post in posts_data:
-        post_id = post.get("id")
-        comments_url = f"https://graph.facebook.com/v18.0/{post_id}/comments"
-        comments_params = {"access_token": access_token, "fields": "id,text,from"}
+#     # Step 2: Fetch comments for each post
+#     for post in posts_data:
+#         post_id = post.get("id")
+#         comments_url = f"https://graph.facebook.com/v18.0/{post_id}/comments"
+#         comments_params = {"access_token": access_token, "fields": "id,text,from"}
 
-        comments_response = requests.get(comments_url, params=comments_params)
-        comments_data = comments_response.json().get("data", [])
+#         comments_response = requests.get(comments_url, params=comments_params)
+#         comments_data = comments_response.json().get("data", [])
 
-        if comments_response.status_code != 200:
-            continue  # Skip if comments couldn't be fetched
+#         if comments_response.status_code != 200:
+#             continue  # Skip if comments couldn't be fetched
 
-        # Step 3: Process comments and aggregate engagement data
-        for comment in comments_data:
-            username = comment.get("from", {}).get("username", "Anonymous")
-            comment_text = comment.get("text", "")
+#         # Step 3: Process comments and aggregate engagement data
+#         for comment in comments_data:
+#             username = comment.get("from", {}).get("username", "Anonymous")
+#             comment_text = comment.get("text", "")
 
-            # Compute sentiment if comment has text
-            sentiment_score = sia.polarity_scores(comment_text)["compound"] if comment_text else 0
+#             # Compute sentiment if comment has text
+#             sentiment_score = sia.polarity_scores(comment_text)["compound"] if comment_text else 0
 
-            fan_activity[username]["count"] += 1
-            fan_activity[username]["sentiment"].append(sentiment_score)
+#             fan_activity[username]["count"] += 1
+#             fan_activity[username]["sentiment"].append(sentiment_score)
 
-    # Step 4: Extract engagement insights
-    top_fans = sorted(fan_activity.items(), key=lambda x: x[1]["count"], reverse=True)[:5]
-    loyal_fans = sorted(fan_activity.items(), key=lambda x: sum(x[1]["sentiment"]) / len(x[1]["sentiment"]) if x[1]["sentiment"] else 0, reverse=True)[:5]
-    # Fix: Accessing "count" correctly
-    suggested_engagement = [fan[0] for fan in loyal_fans if fan[1].get("count", 0) > 1]
+#     # Step 4: Extract engagement insights
+#     top_fans = sorted(fan_activity.items(), key=lambda x: x[1]["count"], reverse=True)[:5]
+#     loyal_fans = sorted(fan_activity.items(), key=lambda x: sum(x[1]["sentiment"]) / len(x[1]["sentiment"]) if x[1]["sentiment"] else 0, reverse=True)[:5]
+#     # Fix: Accessing "count" correctly
+#     suggested_engagement = [fan[0] for fan in loyal_fans if fan[1].get("count", 0) > 1]
 
-    insights = {
-        "top_fans": [{"username": fan[0], "comment_count": fan[1]["count"]} for fan in top_fans],
-        "loyal_fans": [{"username": fan[0], "avg_sentiment": sum(fan[1]["sentiment"]) / len(fan[1]["sentiment"]) if fan[1]["sentiment"] else 0} for fan in loyal_fans],
-        "suggested_engagement": [{"username": fan} for fan in suggested_engagement] if suggested_engagement else "No suggested engagement found."
-    }
+#     insights = {
+#         "top_fans": [{"username": fan[0], "comment_count": fan[1]["count"]} for fan in top_fans],
+#         "loyal_fans": [{"username": fan[0], "avg_sentiment": sum(fan[1]["sentiment"]) / len(fan[1]["sentiment"]) if fan[1]["sentiment"] else 0} for fan in loyal_fans],
+#         "suggested_engagement": [{"username": fan} for fan in suggested_engagement] if suggested_engagement else "No suggested engagement found."
+#     }
 
-    return jsonify(insights)
+#     return jsonify(insights)
 
 if __name__ == "__main__":
     app.run(port=5000, debug=True)
