@@ -1,8 +1,41 @@
 import React, { useEffect, useState } from "react";
-import axios from "axios";
-import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from "recharts";
+import { useAppContext } from "./AppContext";
+import {
+  BarChart,
+  Bar,
+  XAxis,
+  YAxis,
+  Tooltip,
+  ResponsiveContainer,
+  CartesianGrid,
+} from "recharts";
 
-const FanEngagement = ({ userAccessToken }) => {
+const FanEngagement = () => {
+
+  const { comments, fullPageData } = useAppContext();
+
+  function getAllCommentsForAnalysis(allDetails) {
+    const comments = [];
+  
+    allDetails.forEach(page => {
+      const insta = page.instagram_account;
+      if (insta && insta.posts) {
+        insta.posts.forEach(post => {
+          if (post.comments) {
+            post.comments.forEach(comment => {
+              comments.push(comment); 
+            });
+          }
+        });
+      }
+    });
+  
+    return comments;
+  }
+  
+
+  console.log(comments);
+  
   const [fanData, setFanData] = useState({
     top_fans: [],
     loyal_fans: [],
@@ -10,30 +43,57 @@ const FanEngagement = ({ userAccessToken }) => {
   });
 
   useEffect(() => {
-    const fetchFanEngagement = async () => {
-      if (!userAccessToken) {
-        console.error("Missing userAccessToken");
-        return;
+    if (!comments || comments.length === 0) return;
+
+    const fanStats = {};
+
+    comments.forEach((comment) => {
+      const { username, sentiment } = comment;
+
+      if (!fanStats[username]) {
+        fanStats[username] = {
+          username,
+          comment_count: 0,
+          sentiment_sum: 0,
+        };
       }
 
-      try {
-        const response = await axios.get("http://localhost:5000/fan_engagement_insights", {
-          params: { access_token: userAccessToken }, 
-        });
+      fanStats[username].comment_count += 1;
 
-        console.log("Fetched Fan Data:", response.data); // Debugging
-        setFanData(response.data); // Update state with API response
-      } catch (error) {
-        console.error("Error fetching fan engagement data:", error);
-      }
-    };
+      const sentimentScore =
+        sentiment === "Positive" ? 1 : sentiment === "Negative" ? -1 : 0;
 
-    fetchFanEngagement();
-  }, [userAccessToken]);
+      fanStats[username].sentiment_sum += sentimentScore;
+    });
+
+    const fanArray = Object.values(fanStats).map((fan) => ({
+      ...fan,
+      avg_sentiment: fan.sentiment_sum / fan.comment_count,
+    }));
+
+    const top_fans = [...fanArray]
+      .sort((a, b) => b.comment_count - a.comment_count)
+      .slice(0, 5);
+
+    const loyal_fans = [...fanArray]
+      .sort((a, b) => b.avg_sentiment - a.avg_sentiment)
+      .slice(0, 5);
+
+    const suggested_engagement = [...fanArray]
+      .filter((f) => f.comment_count < 3 && f.avg_sentiment > 0.3)
+      .sort((a, b) => b.avg_sentiment - a.avg_sentiment)
+      .slice(0, 5);
+
+    setFanData({
+      top_fans,
+      loyal_fans,
+      suggested_engagement,
+    });
+  }, [comments]);
 
   return (
-    <div className="p-6 bg-gray-100 min-h-screen">
-      {/* 🏆 Top Fans & 💙 Loyal Fans Section */}
+    <div className="p-6 bg-gray-100 min-h-screen mt-10">
+      {/* 🏆 Top Fans & 💙 Loyal Fans */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
         {/* 🏆 Top Fans */}
         <div className="bg-white p-4 rounded-lg shadow-md">
@@ -78,7 +138,7 @@ const FanEngagement = ({ userAccessToken }) => {
         </div>
       </div>
 
-      {/* 📊 Engagement Trends Across All Posts */}
+      {/* 📊 Engagement Trends */}
       <div className="bg-white p-4 rounded-lg shadow-md mb-6">
         <h3 className="text-xl font-bold mb-3 text-black">📈 Engagement Trends Across All Posts</h3>
         <ResponsiveContainer width="100%" height={300}>
@@ -92,7 +152,7 @@ const FanEngagement = ({ userAccessToken }) => {
         </ResponsiveContainer>
       </div>
 
-      {/* 🎯 Suggested Fans to Engage With */}
+      {/* 🎯 Suggested Fans */}
       <div className="bg-white p-4 rounded-lg shadow-md">
         <h3 className="text-xl font-bold mb-3 text-black">🎯 Suggested Fans for Engagement</h3>
         <ul className="pl-5 text-black">
