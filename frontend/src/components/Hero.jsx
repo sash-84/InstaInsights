@@ -22,7 +22,7 @@ const Hero = () => {
           </p>
           <button
             onClick={() => scrollToSection("how-it-works")}
-            className="mt-6 px-6 py-3 text-lg font-semibold bg-gradient-to-r from-[#fcce9f] to-orange-500 rounded-full shadow-lg hover:scale-105 transition-transform duration-300"
+            className="mt-6 px-6 py-3 text-lg font-semibold bg-gradient-to-r from-[#fcce9f] to-[#fbb667] text-gray-900 rounded-full shadow-lg hover:scale-105 transition-transform duration-300"
           >
             Learn More
           </button>
