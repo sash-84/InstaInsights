@@ -40,7 +40,7 @@ const Works = () => {
               <img
                 src={item.image}
                 alt="Loading..."
-                className="rounded-lg w-full h-[400px] object-cover shadow-md transition-all duration-300 hover:shadow-[#fbb667]"
+                className="rounded-lg w-full h-[400px] object-cover shadow-md"
               />
             </div>
           ))}
