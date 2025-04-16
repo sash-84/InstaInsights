@@ -10,6 +10,10 @@
     font-optical-sizing: auto;
 }
 
+body {
+    background-color: #111827;
+}
+
 .nav-links {
     cursor: pointer;
     transition: all ease-in-out 0.3s;
@@ -31,11 +35,5 @@
 }
 
 button {
-    background-color: #fbb667;
-    color: white;
     transition: all ease-in-out 0.3s;
-}
-
-button:hover{
-    opacity: 90%;
 }
