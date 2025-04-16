@@ -25,10 +25,10 @@ const Insights = ({ sentimentData, emotionData }) => {
       <h2 className="text-2xl font-bold text-[#fbb667] mb-4">🔍 Insights</h2>
 
       <p className="text-lg">
-        📊 The majority of comments show a **{dominantSentiment}** sentiment.
+        📊 The majority of comments show a <b>{dominantSentiment}</b> sentiment.
       </p>
       <p className="text-lg">
-        😃 The most expressed emotion is **{dominantEmotion}**.
+        😃 The most expressed emotion is <b>{dominantEmotion}</b>.
       </p>
 
       {Negative > Positive && (
